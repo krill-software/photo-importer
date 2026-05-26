@@ -1734,7 +1734,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "krill-photos-import"
+name = "krill-photo-importer"
 version = "0.1.0"
 dependencies = [
  "anyhow",

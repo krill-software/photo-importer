@@ -1,4 +1,4 @@
-# Photos Import
+# Photo Importer
 
 > Plug in your iPhone, pick photos and videos to keep, batch-save them
 > to a Linux folder.

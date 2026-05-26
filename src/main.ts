@@ -111,7 +111,7 @@ function toggleHamburgerMenu(anchor: HTMLElement) {
   if (existing) { existing.remove(); return; }
   const pop = el("div", { class: "menu-popover" });
   const items: Array<{ label: string; action: () => void } | { sep: true }> = [
-    { label: "Check for updates…", action: () => void checkForUpdates("Photos Import") },
+    { label: "Check for updates…", action: () => void checkForUpdates("Photo Importer") },
     { sep: true },
     { label: "Quit", action: () => void getCurrentWindow().close() },
   ];
@@ -298,7 +298,7 @@ function buildEnvChecklist(e: EnvCheck): HTMLElement {
   const wrap = el("section", { class: "env-section" });
   wrap.append(el("h2", { class: "env-title" }, "Set up the dependencies"));
   wrap.append(el("p", { class: "env-lede" },
-    "Photos Import leans on a few system tools to talk to the iPhone. Anything ✓ is already installed."));
+    "Photo Importer leans on a few system tools to talk to the iPhone. Anything ✓ is already installed."));
 
   const list = el("div", { class: "env-list" });
   for (const item of ENV_ITEMS) {
@@ -446,7 +446,7 @@ async function refresh() {
 
 async function boot() {
   const chrome = mountChrome({
-    productName: "Photos Import",
+    productName: "Photo Importer",
     actions: {},
     showStatusLine: false,
     showAuxPane: true,

@@ -87,7 +87,7 @@ pub async fn probe() -> DeviceState {
         Ok(Some(udid)) => udid,
         Ok(None) => return DeviceState::None,
         Err(e) => {
-            eprintln!("[photos-import] idevice_id failed: {e:?}");
+            eprintln!("[photo-importer] idevice_id failed: {e:?}");
             return DeviceState::None;
         }
     };
@@ -288,7 +288,7 @@ fn cache_dir() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
         .unwrap_or_else(|| PathBuf::from("."))
-        .join("krill-photos-import")
+        .join("krill-photo-importer")
 }
 
 // ---- DCIM listing -------------------------------------------------------

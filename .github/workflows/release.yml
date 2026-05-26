@@ -9,7 +9,7 @@ jobs:
   release:
     uses: krill-software/.github/.github/workflows/krill-app-release.yml@main
     with:
-      product-name: "Photos Import"
+      product-name: "Photo Importer"
       example-file: ""
     secrets: inherit
     permissions:

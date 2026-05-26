@@ -1,5 +1,5 @@
 [package]
-name = "krill-photos-import"
+name = "krill-photo-importer"
 version = "0.1.0"
 description = "Import iPhone Camera Roll over USB on Linux"
 authors = ["Filip"]
@@ -8,7 +8,7 @@ rust-version = "1.89"
 license = "MIT"
 
 [lib]
-name = "krill_photos_import_lib"
+name = "krill_photo_importer_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

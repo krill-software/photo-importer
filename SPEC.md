@@ -1,4 +1,4 @@
-# Photos Import — Spec (v1)
+# Photo Importer — Spec (v1)
 
 A minimal Linux importer for the iPhone Camera Roll. Plug in the
 phone, see a thumbnail grid of everything on it, multi-select, choose
@@ -7,7 +7,7 @@ a destination, optionally transcode HEIC to JPEG, and batch-copy.
 the menu bar and the "are you sure" dialogs.
 
 v1 imports from iPhone over USB. Generic camera / MTP support is
-explicitly deferred — naming the app `photos-import` hedges the slug
+explicitly deferred — naming the app `photo-importer` hedges the slug
 for the future without committing to the abstraction now.
 
 ## In one sentence
@@ -19,16 +19,16 @@ to a Linux folder.**
 
 | Where                | Value                                            |
 |----------------------|--------------------------------------------------|
-| Slug                 | `photos-import`                                  |
-| Binary               | `krill-photos-import`                            |
-| Cargo package        | `krill-photos-import`                            |
-| Cargo lib            | `krill_photos_import_lib`                        |
-| `package.json` name  | `krill-photos-import`                            |
-| Bundle identifier    | `software.krill.photos-import`                   |
-| productName          | `Photos Import`                                  |
-| State dir            | `$XDG_STATE_HOME/krill-photos-import/`           |
-| Cache dir            | `$XDG_CACHE_HOME/krill-photos-import/`           |
-| GitHub repo          | `krill-software/photos-import`                   |
+| Slug                 | `photo-importer`                                  |
+| Binary               | `krill-photo-importer`                            |
+| Cargo package        | `krill-photo-importer`                            |
+| Cargo lib            | `krill_photo_importer_lib`                        |
+| `package.json` name  | `krill-photo-importer`                            |
+| Bundle identifier    | `software.krill.photo-importer`                   |
+| productName          | `Photo Importer`                                  |
+| State dir            | `$XDG_STATE_HOME/krill-photo-importer/`           |
+| Cache dir            | `$XDG_CACHE_HOME/krill-photo-importer/`           |
+| GitHub repo          | `krill-software/photo-importer`                   |
 | Lucide icon          | `image-down`                                     |
 
 ## Hard safety guarantee — **read-only against the iPhone**
@@ -89,7 +89,7 @@ of sidebar.
 - **Detection.** `idevice_id -l` to list paired devices; `ideviceinfo`
   for the device's display name.
 - **Browsing.** Mount the iPhone's Camera Roll via `ifuse` to a temp
-  directory under `$XDG_CACHE_HOME/krill-photos-import/mount/`. The
+  directory under `$XDG_CACHE_HOME/krill-photo-importer/mount/`. The
   Camera Roll lives at `/DCIM/{100,101,…}APPLE/`.
 - **Reading.** Plain `tokio::fs` against the FUSE mount; no AFC
   protocol handling in our code.
@@ -105,7 +105,7 @@ of sidebar.
   pull the first frame via `ffmpeg -ss 0 -frames:v 1` — defer if no
   ffmpeg installed.
 - **Generation.** Decode at 256×256 max, write to
-  `$XDG_CACHE_HOME/krill-photos-import/thumbs/<sha256>.jpg`. Keyed by
+  `$XDG_CACHE_HOME/krill-photo-importer/thumbs/<sha256>.jpg`. Keyed by
   the file's path + mtime hash so re-imports skip re-decoding.
 - **Pace.** Generate lazily as cells scroll into view; a small worker
   pool (≤ 4 concurrent) to keep the UI responsive.
@@ -136,13 +136,13 @@ of sidebar.
 
 ## State files
 
-- `$XDG_STATE_HOME/krill-photos-import/settings.json`
+- `$XDG_STATE_HOME/krill-photo-importer/settings.json`
   - `lastDestinationFolder`: string
   - `conversionMode`: `"keep" | "heic-to-jpeg"`
   - `jpegQuality`: number (1–100, default 90)
-- `$XDG_CACHE_HOME/krill-photos-import/thumbs/`
+- `$XDG_CACHE_HOME/krill-photo-importer/thumbs/`
   - Per-file `<sha256>.jpg` thumbnails. Disposable.
-- `$XDG_CACHE_HOME/krill-photos-import/mount/`
+- `$XDG_CACHE_HOME/krill-photo-importer/mount/`
   - The active ifuse mountpoint while the app runs. Unmounted on quit.
 
 No history sidecar in v1 — the OS file manager is the history.
