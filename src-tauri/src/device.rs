@@ -35,8 +35,10 @@ pub struct Device {
 pub enum DeviceState {
     /// No iPhone plugged in.
     None,
-    /// Plugged in but not trusted yet — user must tap "Trust" on phone.
-    NeedsTrust { device: Device },
+    /// Detected but not trusted yet. `hint` is the human-readable next
+    /// step — varies depending on whether the iPhone is locked, needs a
+    /// passcode, or just needs the Trust dialog acknowledged.
+    NeedsTrust { device: Device, hint: String },
     /// Connected, paired, ready.
     Ready { device: Device },
 }
@@ -90,14 +92,80 @@ pub async fn probe() -> DeviceState {
         }
     };
 
-    // ideviceinfo doubles as our trust probe — if the device isn't
-    // paired/trusted yet, the call fails with a pairing-protocol error.
-    match device_name(&udid).await {
-        Ok(name) => DeviceState::Ready { device: Device { udid, name } },
-        Err(_) => DeviceState::NeedsTrust {
-            device: Device { udid, name: "iPhone".into() },
-        },
+    // If we can read the device name without pairing, we're already
+    // trusted from a previous session — done.
+    if let Ok(name) = device_name(&udid).await {
+        return DeviceState::Ready { device: Device { udid, name } };
     }
+
+    // Not trusted yet. Read-only queries silently fail in this state —
+    // iOS only surfaces the Trust dialog when something actively tries
+    // to pair, so we explicitly invoke `idevicepair pair` and parse its
+    // output to figure out which next-step hint to show.
+    let outcome = try_pair(&udid).await;
+    if matches!(outcome, PairOutcome::Trusted) {
+        // The user accepted the dialog while we were still in this
+        // function (rare but possible) — re-fetch the name and proceed.
+        let name = device_name(&udid).await.unwrap_or_else(|_| "iPhone".into());
+        return DeviceState::Ready { device: Device { udid, name } };
+    }
+    let hint = match outcome {
+        PairOutcome::Trusted => unreachable!(),
+        PairOutcome::PromptShown =>
+            "Look at your iPhone and tap “Trust This Computer.” Then click Refresh.".into(),
+        PairOutcome::NeedsUnlock =>
+            "Unlock your iPhone first, then click Refresh.".into(),
+        PairOutcome::Other(msg) =>
+            format!("Pairing didn't start: {msg}"),
+    };
+    DeviceState::NeedsTrust {
+        device: Device { udid, name: "iPhone".into() },
+        hint,
+    }
+}
+
+enum PairOutcome {
+    /// `SUCCESS: Paired with device …` — fully paired, can proceed.
+    Trusted,
+    /// `Please accept the trust dialog on the screen of device …` —
+    /// the dialog is now showing on the iPhone, waiting on the user.
+    PromptShown,
+    /// `Could not connect to lockdownd: Please make sure the device is
+    /// unlocked` or similar passcode-related text — phone is locked.
+    NeedsUnlock,
+    /// Anything else — surface the first line back to the user.
+    Other(String),
+}
+
+async fn try_pair(udid: &str) -> PairOutcome {
+    let out = Command::new("idevicepair")
+        .args(["-u", udid, "pair"])
+        .output()
+        .await;
+    let Ok(out) = out else {
+        return PairOutcome::Other("idevicepair not installed".into());
+    };
+    let combined = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let lower = combined.to_lowercase();
+    if lower.contains("success") && lower.contains("paired") {
+        return PairOutcome::Trusted;
+    }
+    if lower.contains("trust dialog") {
+        return PairOutcome::PromptShown;
+    }
+    if lower.contains("unlock") || lower.contains("passcode") {
+        return PairOutcome::NeedsUnlock;
+    }
+    let first_line = combined
+        .lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("unknown error")
+        .to_string();
+    PairOutcome::Other(first_line)
 }
 
 async fn which(bin: &str) -> bool {

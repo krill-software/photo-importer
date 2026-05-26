@@ -10,7 +10,7 @@ import { icons as lucideIcons, createElement as createLucide } from "lucide";
 interface Device { udid: string; name: string }
 type DeviceState =
   | { kind: "none" }
-  | { kind: "needs-trust"; device: Device }
+  | { kind: "needs-trust"; device: Device; hint: string }
   | { kind: "ready"; device: Device };
 
 interface EnvCheck {
@@ -228,9 +228,7 @@ function renderMain() {
       ));
       break;
     case "needs-trust":
-      root.append(buildBanner("info",
-        `Tap "Trust This Computer" on your iPhone, then click Refresh.`,
-      ));
+      root.append(buildBanner("info", device.hint));
       break;
     case "ready":
       if (media.length === 0) {
@@ -415,8 +413,15 @@ async function refresh() {
       await invoke("mount_device", { udid: device.device.udid });
       media = await invoke<MediaItem[]>("list_media");
     } catch (e: any) {
-      // Mount failures usually mean Trust hasn't been granted yet.
-      device = { kind: "needs-trust", device: device.device };
+      // Mount failures here are post-pair — usually a race where the
+      // user accepted Trust but lockdownd hasn't propagated the new
+      // pair record yet. Asking them to refresh again almost always
+      // works.
+      device = {
+        kind: "needs-trust",
+        device: device.device,
+        hint: `Couldn't mount the iPhone (${String(e)}). Try Refresh again in a second.`,
+      };
       console.warn("mount/list failed:", e);
     }
   }
