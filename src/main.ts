@@ -10,9 +10,15 @@ import { icons as lucideIcons, createElement as createLucide } from "lucide";
 interface Device { udid: string; name: string }
 type DeviceState =
   | { kind: "none" }
-  | { kind: "tools-missing"; which: string }
   | { kind: "needs-trust"; device: Device }
   | { kind: "ready"; device: Device };
+
+interface EnvCheck {
+  idevice_id: boolean;
+  ifuse: boolean;
+  fusermount: boolean;
+  usbmuxd_running: boolean;
+}
 
 interface MediaItem {
   name: string;
@@ -68,6 +74,7 @@ let mainContentEl: HTMLElement;
 let auxEl: HTMLElement;
 let device: DeviceState = { kind: "none" };
 let media: MediaItem[] = [];
+let env: EnvCheck | null = null;
 
 // ---- Main topbar (window controls + drag region) -------------------
 
@@ -140,23 +147,24 @@ function renderAux() {
   visual.append(iconSvg("smartphone", 24));
   deviceCard.append(visual);
   const text = el("div", { class: "device-text" });
-  switch (device.kind) {
-    case "none":
-      text.append(el("div", { class: "device-name muted" }, "No iPhone"));
-      text.append(el("div", { class: "device-sub" }, "Plug one in via USB"));
-      break;
-    case "tools-missing":
-      text.append(el("div", { class: "device-name muted" }, "Missing tool"));
-      text.append(el("div", { class: "device-sub" }, device.which + " not installed"));
-      break;
-    case "needs-trust":
-      text.append(el("div", { class: "device-name" }, device.device.name));
-      text.append(el("div", { class: "device-sub" }, "Tap Trust on the iPhone"));
-      break;
-    case "ready":
-      text.append(el("div", { class: "device-name" }, device.device.name));
-      text.append(el("div", { class: "device-sub" }, "connected"));
-      break;
+  if (env && !envOk(env)) {
+    text.append(el("div", { class: "device-name muted" }, "Setup needed"));
+    text.append(el("div", { class: "device-sub" }, "Install missing tools first"));
+  } else {
+    switch (device.kind) {
+      case "none":
+        text.append(el("div", { class: "device-name muted" }, "No iPhone"));
+        text.append(el("div", { class: "device-sub" }, "Plug one in via USB"));
+        break;
+      case "needs-trust":
+        text.append(el("div", { class: "device-name" }, device.device.name));
+        text.append(el("div", { class: "device-sub" }, "Tap Trust on the iPhone"));
+        break;
+      case "ready":
+        text.append(el("div", { class: "device-name" }, device.device.name));
+        text.append(el("div", { class: "device-sub" }, "connected"));
+        break;
+    }
   }
   deviceCard.append(text);
   auxEl.append(deviceCard);
@@ -203,15 +211,16 @@ function renderAux() {
 function renderMain() {
   const root = el("div", { class: "main" });
 
-  // Empty / error states based on device kind
+  // Env check takes priority — if anything's missing, no point talking
+  // about devices yet.
+  if (env && !envOk(env)) {
+    root.append(buildEnvChecklist(env));
+    mainContentEl.replaceChildren(root);
+    return;
+  }
+
+  // Device state UI.
   switch (device.kind) {
-    case "tools-missing":
-      root.append(buildBanner("error",
-        `${device.which} not found.`,
-        "Install with apt:",
-        el("pre", { class: "banner-pre" }, "sudo apt install libimobiledevice-utils ifuse libheif1"),
-      ));
-      break;
     case "none":
       root.append(buildEmptyState(
         "Plug in your iPhone",
@@ -236,6 +245,94 @@ function renderMain() {
   }
 
   mainContentEl.replaceChildren(root);
+}
+
+function envOk(e: EnvCheck): boolean {
+  return e.idevice_id && e.ifuse && e.fusermount && e.usbmuxd_running;
+}
+
+interface EnvItem {
+  key: keyof EnvCheck;
+  label: string;
+  why: string;
+  fix: string;
+}
+
+const ENV_ITEMS: EnvItem[] = [
+  {
+    key: "idevice_id",
+    label: "libimobiledevice",
+    why: "Talks to your iPhone over USB.",
+    fix: "sudo apt install libimobiledevice-utils",
+  },
+  {
+    key: "ifuse",
+    label: "ifuse",
+    why: "Mounts the iPhone's Camera Roll as a filesystem.",
+    fix: "sudo apt install ifuse",
+  },
+  {
+    key: "fusermount",
+    label: "FUSE",
+    why: "Userspace filesystem support — needed by ifuse to mount.",
+    fix: "sudo apt install fuse",
+  },
+  {
+    key: "usbmuxd_running",
+    label: "usbmuxd",
+    why: "Daemon that bridges USB to the iPhone protocol. Usually auto-starts after install.",
+    fix: "sudo apt install usbmuxd && sudo systemctl start usbmuxd",
+  },
+];
+
+function buildEnvChecklist(e: EnvCheck): HTMLElement {
+  const wrap = el("section", { class: "env-section" });
+  wrap.append(el("h2", { class: "env-title" }, "Set up the dependencies"));
+  wrap.append(el("p", { class: "env-lede" },
+    "Photos Import leans on a few system tools to talk to the iPhone. Anything ✓ is already installed."));
+
+  const list = el("div", { class: "env-list" });
+  for (const item of ENV_ITEMS) {
+    const ok = e[item.key];
+    const row = el("div", { class: "env-row", "data-ok": ok ? "true" : "false" });
+
+    const status = el("div", { class: "env-status" });
+    status.append(iconSvg(ok ? "check" : "x", 16));
+    row.append(status);
+
+    const text = el("div", { class: "env-text" });
+    text.append(el("div", { class: "env-label" }, item.label));
+    text.append(el("div", { class: "env-why" }, item.why));
+    if (!ok) {
+      const fixRow = el("div", { class: "env-fix-row" });
+      const fix = el("code", { class: "env-fix" }, item.fix);
+      const copy = el("button", { class: "env-fix-copy", type: "button", title: "Copy command" });
+      copy.append(iconSvg("copy", 12));
+      copy.addEventListener("click", async (ev) => {
+        ev.stopPropagation();
+        try {
+          await navigator.clipboard.writeText(item.fix);
+          copy.replaceChildren(iconSvg("check", 12));
+          setTimeout(() => copy.replaceChildren(iconSvg("copy", 12)), 1200);
+        } catch { /* ignore */ }
+      });
+      fixRow.append(fix, copy);
+      text.append(fixRow);
+    }
+    row.append(text);
+
+    list.append(row);
+  }
+  wrap.append(list);
+
+  const refreshHint = el("p", { class: "env-refresh-hint" },
+    "After installing, click ");
+  const refreshLink = el("button", { class: "env-refresh-link", type: "button" }, "Refresh");
+  refreshLink.addEventListener("click", () => void refresh());
+  refreshHint.append(refreshLink, document.createTextNode("."));
+  wrap.append(refreshHint);
+
+  return wrap;
 }
 
 function buildBanner(kind: "info" | "error", ...children: (Node | string)[]): HTMLElement {
@@ -295,6 +392,19 @@ async function refresh() {
   media = [];
   renderAux();
   renderMain();
+
+  // Always re-check env first — user may have just apt-installed something.
+  try {
+    env = await invoke<EnvCheck>("check_environment");
+  } catch (e) {
+    console.error("check_environment failed:", e);
+  }
+  if (!env || !envOk(env)) {
+    renderAux();
+    renderMain();
+    return;
+  }
+
   try {
     device = await invoke<DeviceState>("probe_device");
   } catch (e) {

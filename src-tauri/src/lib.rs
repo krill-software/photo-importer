@@ -15,6 +15,11 @@ struct AppCtx {
 }
 
 #[tauri::command]
+async fn check_environment() -> device::EnvCheck {
+    device::check_env().await
+}
+
+#[tauri::command]
 async fn probe_device() -> device::DeviceState {
     device::probe().await
 }
@@ -82,6 +87,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            check_environment,
             probe_device,
             mount_device,
             list_media,

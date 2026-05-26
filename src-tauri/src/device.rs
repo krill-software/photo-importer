@@ -33,14 +33,46 @@ pub struct Device {
 #[derive(Debug, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum DeviceState {
-    /// No iPhone plugged in (or libimobiledevice tools missing).
+    /// No iPhone plugged in.
     None,
-    /// Tools missing — show install instructions.
-    ToolsMissing { which: String },
     /// Plugged in but not trusted yet — user must tap "Trust" on phone.
     NeedsTrust { device: Device },
     /// Connected, paired, ready.
     Ready { device: Device },
+}
+
+/// Per-component snapshot of the host environment. Each entry is a
+/// single thing we depend on, so the UI can tell the user *exactly*
+/// what's missing instead of one blanket "install three packages"
+/// banner.
+#[derive(Debug, Serialize, Clone)]
+pub struct EnvCheck {
+    /// `idevice_id` binary — proxy for `libimobiledevice-utils`.
+    pub idevice_id: bool,
+    /// `ifuse` binary — separate Debian package.
+    pub ifuse: bool,
+    /// `fusermount` binary — proxy for FUSE userspace.
+    pub fusermount: bool,
+    /// `/var/run/usbmuxd` socket present — proxy for the usbmuxd daemon
+    /// actually running. The package usually ships a systemd unit that
+    /// starts on boot, but in containers or minimal installs it might
+    /// not be active.
+    pub usbmuxd_running: bool,
+}
+
+pub async fn check_env() -> EnvCheck {
+    EnvCheck {
+        idevice_id: which("idevice_id").await,
+        ifuse: which("ifuse").await,
+        fusermount: which("fusermount").await,
+        usbmuxd_running: usbmuxd_reachable().await,
+    }
+}
+
+async fn usbmuxd_reachable() -> bool {
+    // The daemon owns /var/run/usbmuxd (Unix socket). Presence is a
+    // good-enough proxy without actually speaking the protocol.
+    fs::metadata("/var/run/usbmuxd").await.is_ok()
 }
 
 /// Probe for a connected iPhone.
@@ -49,10 +81,6 @@ pub enum DeviceState {
 /// device handling is a future polish item once we know what the UX
 /// should be).
 pub async fn probe() -> DeviceState {
-    if !which("idevice_id").await {
-        return DeviceState::ToolsMissing { which: "idevice_id".into() };
-    }
-
     let udid = match first_udid().await {
         Ok(Some(udid)) => udid,
         Ok(None) => return DeviceState::None,
