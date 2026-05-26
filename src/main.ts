@@ -75,6 +75,7 @@ let auxEl: HTMLElement;
 let device: DeviceState = { kind: "none" };
 let media: MediaItem[] = [];
 let env: EnvCheck | null = null;
+let refreshing = false;
 
 // ---- Main topbar (window controls + drag region) -------------------
 
@@ -141,6 +142,28 @@ function renderAux() {
   auxEl.replaceChildren();
   auxEl.append(buildAuxTopbar());
 
+  // Refresh row — at the top so the most-used action is closest to
+  // the hamburger.
+  const refreshRow = el("button", {
+    class: "aux-nav refresh-row",
+    type: "button",
+    title: "Refresh device",
+  });
+  if (refreshing) refreshRow.setAttribute("data-refreshing", "true");
+  const refreshIcon = el("div", { class: "aux-nav-icon" });
+  refreshIcon.append(iconSvg("refresh-cw", 16));
+  refreshRow.append(refreshIcon);
+  const refreshText = el("div", { class: "aux-nav-text" });
+  refreshText.append(el("div", { class: "aux-nav-name" },
+    refreshing ? "Syncing…" : "Refresh"));
+  refreshText.append(el("div", { class: "aux-nav-sub" },
+    refreshing ? "talking to the iPhone" : "re-detect the iPhone"));
+  refreshRow.append(refreshText);
+  refreshRow.addEventListener("click", () => {
+    if (!refreshing) void refresh();
+  });
+  auxEl.append(refreshRow);
+
   // Device card
   const deviceCard = el("div", { class: "device-card" });
   const visual = el("div", { class: "device-visual" });
@@ -168,18 +191,6 @@ function renderAux() {
   }
   deviceCard.append(text);
   auxEl.append(deviceCard);
-
-  // Refresh row
-  const refreshRow = el("button", { class: "aux-nav", type: "button", title: "Refresh device" });
-  const refreshIcon = el("div", { class: "aux-nav-icon" });
-  refreshIcon.append(iconSvg("refresh-cw", 16));
-  refreshRow.append(refreshIcon);
-  const refreshText = el("div", { class: "aux-nav-text" });
-  refreshText.append(el("div", { class: "aux-nav-name" }, "Refresh"));
-  refreshText.append(el("div", { class: "aux-nav-sub" }, "re-detect the iPhone"));
-  refreshRow.append(refreshText);
-  refreshRow.addEventListener("click", () => void refresh());
-  auxEl.append(refreshRow);
 
   // Counts (only meaningful when ready)
   if (device.kind === "ready" && media.length > 0) {
@@ -386,47 +397,49 @@ function buildMediaTable(): HTMLElement {
 // ---- Device flow ---------------------------------------------------
 
 async function refresh() {
+  if (refreshing) return;
+  refreshing = true;
   device = { kind: "none" };
   media = [];
   renderAux();
   renderMain();
 
-  // Always re-check env first — user may have just apt-installed something.
   try {
-    env = await invoke<EnvCheck>("check_environment");
-  } catch (e) {
-    console.error("check_environment failed:", e);
-  }
-  if (!env || !envOk(env)) {
+    // Always re-check env first — user may have just apt-installed something.
+    try {
+      env = await invoke<EnvCheck>("check_environment");
+    } catch (e) {
+      console.error("check_environment failed:", e);
+    }
+    if (!env || !envOk(env)) return;
+
+    try {
+      device = await invoke<DeviceState>("probe_device");
+    } catch (e) {
+      console.error("probe_device failed:", e);
+    }
+    if (device.kind === "ready") {
+      try {
+        await invoke("mount_device", { udid: device.device.udid });
+        media = await invoke<MediaItem[]>("list_media");
+      } catch (e: any) {
+        // Mount failures here are post-pair — usually a race where the
+        // user accepted Trust but lockdownd hasn't propagated the new
+        // pair record yet. Asking them to refresh again almost always
+        // works.
+        device = {
+          kind: "needs-trust",
+          device: device.device,
+          hint: `Couldn't mount the iPhone (${String(e)}). Try Refresh again in a second.`,
+        };
+        console.warn("mount/list failed:", e);
+      }
+    }
+  } finally {
+    refreshing = false;
     renderAux();
     renderMain();
-    return;
   }
-
-  try {
-    device = await invoke<DeviceState>("probe_device");
-  } catch (e) {
-    console.error("probe_device failed:", e);
-  }
-  if (device.kind === "ready") {
-    try {
-      await invoke("mount_device", { udid: device.device.udid });
-      media = await invoke<MediaItem[]>("list_media");
-    } catch (e: any) {
-      // Mount failures here are post-pair — usually a race where the
-      // user accepted Trust but lockdownd hasn't propagated the new
-      // pair record yet. Asking them to refresh again almost always
-      // works.
-      device = {
-        kind: "needs-trust",
-        device: device.device,
-        hint: `Couldn't mount the iPhone (${String(e)}). Try Refresh again in a second.`,
-      };
-      console.warn("mount/list failed:", e);
-    }
-  }
-  renderAux();
-  renderMain();
 }
 
 // ---- Boot ----------------------------------------------------------

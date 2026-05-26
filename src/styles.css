@@ -165,6 +165,24 @@
 .aux-nav-name { font-size: 13px; font-weight: 600; }
 .aux-nav-sub  { font-size: 10.5px; color: var(--fm-muted); }
 
+/* Refresh row spinner — kicks in while a sync is in flight. */
+@keyframes photos-spin {
+  to { transform: rotate(360deg); }
+}
+.aux-nav.refresh-row[data-refreshing="true"] .aux-nav-icon {
+  color: var(--fm-accent);
+}
+.aux-nav.refresh-row[data-refreshing="true"] .aux-nav-icon svg {
+  animation: photos-spin 0.9s linear infinite;
+}
+.aux-nav.refresh-row[data-refreshing="true"] .aux-nav-name {
+  color: var(--fm-accent);
+}
+.aux-nav.refresh-row[data-refreshing="true"]:hover {
+  background: transparent;
+  cursor: default;
+}
+
 .device-counts {
   padding: 14px;
   display: flex;
