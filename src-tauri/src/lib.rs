@@ -1,4 +1,5 @@
 mod device;
+mod thumbs;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -59,6 +60,13 @@ async fn list_media(
 }
 
 #[tauri::command]
+async fn thumb_for(path: String) -> Result<String, String> {
+    thumbs::thumb_data_url(std::path::Path::new(&path))
+        .await
+        .map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
 async fn unmount_device(state: State<'_, Arc<AppCtx>>) -> Result<(), String> {
     let prev = state.mount.lock().await.take();
     if let Some(p) = prev {
@@ -98,6 +106,7 @@ pub fn run() {
             probe_device,
             mount_device,
             list_media,
+            thumb_for,
             unmount_device,
         ])
         .run(tauri::generate_context!())

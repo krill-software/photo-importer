@@ -372,45 +372,173 @@ function buildEmptyState(title: string, body: string): HTMLElement {
   return e;
 }
 
+// --- Multi-select state -----------------------------------------------
+//
+// Anchor = the last cell clicked without modifiers; shift-click extends a
+// range from anchor to the clicked cell (inclusive). Ctrl-click toggles
+// just the clicked cell without moving the anchor. Plain click selects
+// only the clicked cell and resets the anchor. Background click clears.
+
+const selected = new Set<string>();
+let anchorIndex = -1;
+
+function clearSelection() {
+  if (selected.size === 0) return;
+  selected.clear();
+  anchorIndex = -1;
+  refreshSelectionView();
+}
+
+function refreshSelectionView() {
+  // Toggle data-selected on each rendered cell + repaint the footer
+  // bar without rebuilding the entire grid.
+  const grid = mainContentEl.querySelector(".media-grid");
+  if (grid) {
+    for (const cell of grid.querySelectorAll<HTMLElement>(".media-cell")) {
+      const p = cell.dataset.path!;
+      if (selected.has(p)) cell.setAttribute("data-selected", "true");
+      else cell.removeAttribute("data-selected");
+    }
+  }
+  paintFooter();
+}
+
+function paintFooter() {
+  const footer = mainContentEl.querySelector(".media-footer");
+  if (!footer) return;
+  const summary = footer.querySelector(".footer-summary")!;
+  const totalBytes = media.reduce((a, m) => a + m.size, 0);
+  if (selected.size > 0) {
+    const selBytes = media
+      .filter((m) => selected.has(m.path))
+      .reduce((a, m) => a + m.size, 0);
+    summary.textContent = `${selected.size} of ${media.length} selected · ${formatBytes(selBytes)}`;
+    summary.setAttribute("data-mode", "selection");
+  } else if (listing) {
+    summary.textContent = `Listing… ${media.length} so far · ${formatBytes(totalBytes)}`;
+    summary.setAttribute("data-mode", "listing");
+  } else {
+    summary.textContent = `${media.length} item${media.length === 1 ? "" : "s"} on device · ${formatBytes(totalBytes)}`;
+    summary.removeAttribute("data-mode");
+  }
+  const importBtn = footer.querySelector<HTMLButtonElement>(".import-btn");
+  if (importBtn) importBtn.disabled = true; // Import lands in M3
+}
+
 function buildMediaTable(): HTMLElement {
   const wrap = el("div", { class: "media-table-wrap" });
-  const head = el("div", { class: "media-table-head" });
-  head.append(el("span", { class: "col-name" }, "Name"));
-  head.append(el("span", { class: "col-kind" }, "Kind"));
-  head.append(el("span", { class: "col-size" }, "Size"));
-  head.append(el("span", { class: "col-date" }, "Captured"));
-  wrap.append(head);
 
-  const list = el("div", { class: "media-table" });
-  for (const item of media) {
-    const row = el("div", { class: "media-row" });
-    const nameCell = el("span", { class: "col-name", title: item.path });
-    nameCell.append(iconSvg(item.kind === "video" ? "video" : "image", 14));
-    nameCell.append(el("span", {}, item.name));
-    row.append(nameCell);
-    row.append(el("span", { class: "col-kind" }, item.ext.toUpperCase()));
-    row.append(el("span", { class: "col-size mono" }, formatBytes(item.size)));
-    row.append(el("span", { class: "col-date mono" },
-      new Date(item.modified_ms).toLocaleString()));
-    list.append(row);
-  }
-  wrap.append(list);
+  const grid = el("div", { class: "media-grid" });
+  grid.addEventListener("click", (e) => {
+    // Clicking the empty grid area clears selection.
+    if (e.target === grid) clearSelection();
+  });
 
-  // Footer with count + (stubbed) import button
+  thumbObserver?.disconnect();
+  thumbObserver = newThumbObserver(grid);
+  media.forEach((item, i) => grid.append(buildMediaCell(item, i)));
+  wrap.append(grid);
+
+  // Footer
   const footer = el("div", { class: "media-footer" });
-  const totalBytes = media.reduce((a, m) => a + m.size, 0);
-  const summary = listing
-    ? `Listing… ${media.length} so far · ${formatBytes(totalBytes)}`
-    : `${media.length} item${media.length === 1 ? "" : "s"} on device · ${formatBytes(totalBytes)}`;
-  const summaryEl = el("span", { class: "footer-summary" }, summary);
-  if (listing) summaryEl.setAttribute("data-listing", "true");
+  const summaryEl = el("span", { class: "footer-summary" }, "");
   footer.append(summaryEl);
   const importBtn = el("button", { class: "import-btn", type: "button", disabled: "" },
     "Import (coming in M3)") as HTMLButtonElement;
   footer.append(importBtn);
   wrap.append(footer);
 
+  // Initial footer paint after the elements are in the DOM.
+  queueMicrotask(paintFooter);
+
   return wrap;
+}
+
+function buildMediaCell(item: MediaItem, index: number): HTMLElement {
+  const cell = el("div", { class: "media-cell" });
+  cell.dataset.path = item.path;
+  cell.dataset.index = String(index);
+  if (selected.has(item.path)) cell.setAttribute("data-selected", "true");
+  if (item.kind === "video") cell.setAttribute("data-video", "true");
+
+  // Thumbnail slot — kept blank until IntersectionObserver fires.
+  const thumbWrap = el("div", { class: "thumb" });
+  thumbWrap.append(iconSvg(item.kind === "video" ? "video" : "image", 28));
+  cell.append(thumbWrap);
+
+  // Check overlay (rendered in CSS via data-selected="true").
+
+  // Caption: filename + size.
+  const cap = el("div", { class: "cell-caption" });
+  cap.append(el("div", { class: "cell-name", title: item.name }, item.name));
+  cap.append(el("div", { class: "cell-meta" }, formatBytes(item.size)));
+  cell.append(cap);
+
+  cell.addEventListener("click", (e) => onCellClick(e, index));
+  thumbObserver?.observe(cell);
+  return cell;
+}
+
+function onCellClick(e: MouseEvent, index: number) {
+  e.stopPropagation();
+  const item = media[index];
+  if (!item) return;
+
+  if (e.shiftKey && anchorIndex >= 0) {
+    const [a, b] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
+    for (let i = a; i <= b; i++) selected.add(media[i].path);
+  } else if (e.ctrlKey || e.metaKey) {
+    if (selected.has(item.path)) selected.delete(item.path);
+    else selected.add(item.path);
+    anchorIndex = index;
+  } else {
+    selected.clear();
+    selected.add(item.path);
+    anchorIndex = index;
+  }
+  refreshSelectionView();
+}
+
+// --- Lazy thumbnail loading ------------------------------------------
+
+const thumbCache = new Map<string, string>(); // path -> data URL
+const thumbFailed = new Set<string>(); // paths whose decode failed
+let thumbObserver: IntersectionObserver | null = null;
+
+function newThumbObserver(root: HTMLElement): IntersectionObserver {
+  return new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const cell = entry.target as HTMLElement;
+      const p = cell.dataset.path;
+      if (!p) continue;
+      thumbObserver?.unobserve(cell);
+      void loadThumb(p, cell);
+    }
+  }, { root, rootMargin: "200px" });
+}
+
+async function loadThumb(path: string, cell: HTMLElement) {
+  if (thumbFailed.has(path)) return;
+  const cached = thumbCache.get(path);
+  if (cached) { paintThumb(cell, cached); return; }
+  try {
+    const url = await invoke<string>("thumb_for", { path });
+    thumbCache.set(path, url);
+    paintThumb(cell, url);
+  } catch (e) {
+    // HEIC without libheif-dev, broken file, etc — leave the icon in
+    // place and mark so we don't retry on every scroll.
+    thumbFailed.add(path);
+    console.warn("thumb_for failed for", path, e);
+  }
+}
+
+function paintThumb(cell: HTMLElement, url: string) {
+  const slot = cell.querySelector(".thumb");
+  if (!slot) return;
+  const img = el("img", { src: url, alt: "", loading: "lazy" });
+  slot.replaceChildren(img);
 }
 
 // ---- Device flow ---------------------------------------------------
