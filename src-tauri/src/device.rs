@@ -225,28 +225,40 @@ pub async fn mount(udid: &str) -> Result<PathBuf> {
     }
 
     let mount = mount_dir(udid);
+
+    // Aggressive pre-cleanup: a previous crash can leave a zombie FUSE
+    // mountpoint at `mount` whose stat() fails with ENOTCONN, which in
+    // turn breaks create_dir_all. Lazy-unmount + rmdir first, ignoring
+    // every error along the way — best effort cleanup before fresh
+    // mount.
+    let _ = Command::new("fusermount")
+        .args(["-uz"])
+        .arg(&mount)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await;
+    let _ = tokio::fs::remove_dir(&mount).await;
+
     fs::create_dir_all(&mount).await.with_context(|| {
         format!("creating mountpoint {}", mount.display())
     })?;
 
-    // If something's already mounted there (from a crashed previous run),
-    // try to unmount cleanly first. Ignore failures — could be empty.
-    let _ = unmount(&mount).await;
-
-    let status = Command::new("ifuse")
+    let out = Command::new("ifuse")
         .args(["-u", udid])
         .arg(&mount)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .status()
+        .output()
         .await
         .context("spawning ifuse")?;
 
-    if !status.success() {
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
         return Err(anyhow!(
-            "ifuse failed to mount {udid} at {} (exit {status}). \
-             Tap 'Trust This Computer' on the iPhone and retry.",
-            mount.display()
+            "ifuse failed (exit {}): {}",
+            out.status,
+            if stderr.is_empty() { "no stderr".into() } else { stderr },
         ));
     }
 

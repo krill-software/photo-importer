@@ -34,7 +34,7 @@ async fn mount_device(
     if let Some(p) = prev {
         let _ = device::unmount(&p).await;
     }
-    let m = device::mount(&udid).await.map_err(|e| e.to_string())?;
+    let m = device::mount(&udid).await.map_err(|e| format!("{e:#}"))?;
     let display = m.display().to_string();
     *state.mount.lock().await = Some(m);
     Ok(display)
@@ -48,14 +48,14 @@ async fn list_media(
     let Some(mount) = g.as_ref() else {
         return Err("iPhone not mounted".into());
     };
-    device::list_media(mount).await.map_err(|e| e.to_string())
+    device::list_media(mount).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
 async fn unmount_device(state: State<'_, Arc<AppCtx>>) -> Result<(), String> {
     let prev = state.mount.lock().await.take();
     if let Some(p) = prev {
-        device::unmount(&p).await.map_err(|e| e.to_string())?;
+        device::unmount(&p).await.map_err(|e| format!("{e:#}"))?;
     }
     Ok(())
 }
