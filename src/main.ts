@@ -2,6 +2,7 @@ import "@krill-software/desktop-ui/styles";
 import "./styles.css";
 import { mountChrome, showBootError, checkForUpdates } from "@krill-software/desktop-ui";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { icons as lucideIcons, createElement as createLucide } from "lucide";
 
@@ -76,6 +77,12 @@ let device: DeviceState = { kind: "none" };
 let media: MediaItem[] = [];
 let env: EnvCheck | null = null;
 let refreshing = false;
+/// True while list_media is still streaming media-batch events. Distinct
+/// from `refreshing` — the env/device/mount steps finish quickly, then
+/// the walk can take many seconds for a 50 GB library.
+let listing = false;
+/// Schedule incremental re-renders without thrashing on every batch.
+let pendingRender = 0;
 
 // ---- Main topbar (window controls + drag region) -------------------
 
@@ -243,10 +250,17 @@ function renderMain() {
       break;
     case "ready":
       if (media.length === 0) {
-        root.append(buildEmptyState(
-          "No media found",
-          "Your iPhone is connected but /DCIM/ is empty (or still listing). Try Refresh.",
-        ));
+        if (listing) {
+          root.append(buildEmptyState(
+            "Listing iPhone media…",
+            "Walking /DCIM/ over USB. First batch will appear shortly.",
+          ));
+        } else {
+          root.append(buildEmptyState(
+            "No media found",
+            "Your iPhone is connected but /DCIM/ is empty.",
+          ));
+        }
       } else {
         root.append(buildMediaTable());
       }
@@ -384,8 +398,13 @@ function buildMediaTable(): HTMLElement {
 
   // Footer with count + (stubbed) import button
   const footer = el("div", { class: "media-footer" });
-  footer.append(el("span", { class: "footer-summary" },
-    `${media.length} item${media.length === 1 ? "" : "s"} on device · ${formatBytes(media.reduce((a, m) => a + m.size, 0))}`));
+  const totalBytes = media.reduce((a, m) => a + m.size, 0);
+  const summary = listing
+    ? `Listing… ${media.length} so far · ${formatBytes(totalBytes)}`
+    : `${media.length} item${media.length === 1 ? "" : "s"} on device · ${formatBytes(totalBytes)}`;
+  const summaryEl = el("span", { class: "footer-summary" }, summary);
+  if (listing) summaryEl.setAttribute("data-listing", "true");
+  footer.append(summaryEl);
   const importBtn = el("button", { class: "import-btn", type: "button", disabled: "" },
     "Import (coming in M3)") as HTMLButtonElement;
   footer.append(importBtn);
@@ -421,7 +440,15 @@ async function refresh() {
     if (device.kind === "ready") {
       try {
         await invoke("mount_device", { udid: device.device.udid });
-        media = await invoke<MediaItem[]>("list_media");
+        // list_media now streams via media-batch events; the await just
+        // resolves once the walk is done. Frontend state is driven by
+        // those events (see boot()) — `media` may already have items
+        // by the time this returns.
+        media = [];
+        listing = true;
+        renderAux();
+        renderMain();
+        await invoke("list_media");
       } catch (e: any) {
         // Mount failures here are post-pair — usually a race where the
         // user accepted Trust but lockdownd hasn't propagated the new
@@ -460,9 +487,36 @@ async function boot() {
   mainContentEl = el("div", { class: "main-content" });
   viewportEl.replaceChildren(topbar, mainContentEl);
 
+  // Streamed listing — append each batch as it arrives. Re-render
+  // is debounced so 30k items in 600 batches don't repaint the table
+  // 600 times.
+  await listen<MediaItem[]>("media-batch", (e) => {
+    if (!Array.isArray(e.payload)) return;
+    media.push(...e.payload);
+    scheduleRender();
+  });
+  await listen<{ total: number }>("media-done", (_e) => {
+    listing = false;
+    // Final sort: backend doesn't sort across batches, so the in-memory
+    // list ends up in walk-order. Reorder newest-first now that we have
+    // everything.
+    media.sort((a, b) => b.modified_ms - a.modified_ms);
+    renderAux();
+    renderMain();
+  });
+
   renderAux();
   renderMain();
   await refresh();
+}
+
+function scheduleRender() {
+  if (pendingRender) return;
+  pendingRender = requestAnimationFrame(() => {
+    pendingRender = 0;
+    renderAux();
+    renderMain();
+  });
 }
 
 boot().catch((e) => {

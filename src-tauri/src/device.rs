@@ -314,9 +314,24 @@ pub struct MediaItem {
 const IMAGE_EXTS: &[&str] = &["heic", "heif", "jpg", "jpeg", "png", "gif", "webp"];
 const VIDEO_EXTS: &[&str] = &["mov", "mp4", "m4v"];
 
-/// Walk every `/DCIM/<NNNAPPLE>/` directory on the mount and produce a
-/// flat list of media items, newest first.
-pub async fn list_media(mount: &Path) -> Result<Vec<MediaItem>> {
+/// Walk every `/DCIM/<NNNAPPLE>/` directory on the mount and stream
+/// the media items back to the frontend in batches via Tauri events.
+///
+/// **Why streaming.** A user with 50 GB of media has ~tens-of-thousands
+/// of files. Each stat() over the FUSE/AFC mount is a USB roundtrip;
+/// the full walk takes tens of seconds. Returning one giant Vec means
+/// the UI sits blank that whole time. Emitting `media-batch` events as
+/// we go (50 items per batch) lets the table populate within a second
+/// of click, and the spinner keeps spinning until `media-done` fires.
+///
+/// Events emitted (all carry the same string key):
+///   - `media-batch`  — `Vec<MediaItem>` (50 at a time, last batch
+///                      may be shorter)
+///   - `media-done`   — `{ total: usize }` (final count, frontend can
+///                      stop the spinner)
+pub async fn list_media(mount: &Path, app: &tauri::AppHandle) -> Result<()> {
+    use tauri::Emitter;
+
     let dcim = mount.join("DCIM");
     let mut entries = match fs::read_dir(&dcim).await {
         Ok(e) => e,
@@ -328,7 +343,10 @@ pub async fn list_media(mount: &Path) -> Result<Vec<MediaItem>> {
         }
     };
 
-    let mut items = Vec::new();
+    const BATCH_SIZE: usize = 50;
+    let mut buffer: Vec<MediaItem> = Vec::with_capacity(BATCH_SIZE);
+    let mut total: usize = 0;
+
     while let Some(album) = entries.next_entry().await? {
         let p = album.path();
         if !p.is_dir() { continue; }
@@ -336,13 +354,24 @@ pub async fn list_media(mount: &Path) -> Result<Vec<MediaItem>> {
         let Ok(mut files) = fs::read_dir(&p).await else { continue };
         while let Some(f) = files.next_entry().await? {
             if let Some(item) = build_media_item(&f.path()).await {
-                items.push(item);
+                buffer.push(item);
+                if buffer.len() >= BATCH_SIZE {
+                    let chunk = std::mem::replace(
+                        &mut buffer,
+                        Vec::with_capacity(BATCH_SIZE),
+                    );
+                    total += chunk.len();
+                    let _ = app.emit("media-batch", chunk);
+                }
             }
         }
     }
-
-    items.sort_by(|a, b| b.modified_ms.cmp(&a.modified_ms));
-    Ok(items)
+    if !buffer.is_empty() {
+        total += buffer.len();
+        let _ = app.emit("media-batch", buffer);
+    }
+    let _ = app.emit("media-done", serde_json::json!({ "total": total }));
+    Ok(())
 }
 
 async fn build_media_item(path: &Path) -> Option<MediaItem> {

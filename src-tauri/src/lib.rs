@@ -42,13 +42,20 @@ async fn mount_device(
 
 #[tauri::command]
 async fn list_media(
+    app: AppHandle,
     state: State<'_, Arc<AppCtx>>,
-) -> Result<Vec<device::MediaItem>, String> {
-    let g = state.mount.lock().await;
-    let Some(mount) = g.as_ref() else {
+) -> Result<(), String> {
+    // Clone the mount path under the lock so the lock isn't held for
+    // the (potentially long) walk — keeps any concurrent unmount /
+    // command from blocking.
+    let mount = {
+        let g = state.mount.lock().await;
+        g.as_ref().cloned()
+    };
+    let Some(mount) = mount else {
         return Err("iPhone not mounted".into());
     };
-    device::list_media(mount).await.map_err(|e| format!("{e:#}"))
+    device::list_media(&mount, &app).await.map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
