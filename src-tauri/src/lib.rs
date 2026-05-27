@@ -1,4 +1,6 @@
 mod device;
+mod import;
+mod settings;
 mod thumbs;
 
 use std::path::PathBuf;
@@ -67,6 +69,28 @@ async fn thumb_for(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn import_files(
+    paths: Vec<String>,
+    dest: String,
+    app: AppHandle,
+) -> Result<(), String> {
+    let dest_pb = std::path::PathBuf::from(&dest);
+    let result = import::run(paths, dest_pb, app).await;
+    // Remember destination on success so the picker opens there next time.
+    if result.is_ok() {
+        let mut s = settings::load();
+        s.last_destination = Some(dest);
+        let _ = settings::save(&s);
+    }
+    result.map_err(|e| format!("{e:#}"))
+}
+
+#[tauri::command]
+fn load_settings() -> settings::Settings {
+    settings::load()
+}
+
+#[tauri::command]
 async fn unmount_device(state: State<'_, Arc<AppCtx>>) -> Result<(), String> {
     let prev = state.mount.lock().await.take();
     if let Some(p) = prev {
@@ -107,6 +131,8 @@ pub fn run() {
             mount_device,
             list_media,
             thumb_for,
+            import_files,
+            load_settings,
             unmount_device,
         ])
         .run(tauri::generate_context!())

@@ -3,6 +3,7 @@ import "./styles.css";
 import { mountChrome, showBootError, checkForUpdates } from "@krill-software/desktop-ui";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { icons as lucideIcons, createElement as createLucide } from "lucide";
 
@@ -83,6 +84,22 @@ let refreshing = false;
 let listing = false;
 /// Schedule incremental re-renders without thrashing on every batch.
 let pendingRender = 0;
+
+type FilterKind = "all" | "image" | "video";
+let filter: FilterKind = "all";
+
+interface ImportStatus {
+  phase: "started" | "copying" | "done" | "error";
+  current?: number;
+  copied?: number;
+  total?: number;
+  totalBytes?: number;
+  bytesCopied?: number;
+  name?: string;
+  error?: string;
+}
+let importStatus: ImportStatus | null = null;
+let lastDestination: string | null = null;
 
 // ---- Main topbar (window controls + drag region) -------------------
 
@@ -199,25 +216,35 @@ function renderAux() {
   deviceCard.append(text);
   auxEl.append(deviceCard);
 
-  // Counts (only meaningful when ready)
+  // Filter tabs (only when there's media to filter)
   if (device.kind === "ready" && media.length > 0) {
-    const counts = el("div", { class: "device-counts" });
-    const total = media.length;
+    const tabs = el("div", { class: "filter-tabs" });
     const photos = media.filter((m) => m.kind === "image").length;
     const videos = media.filter((m) => m.kind === "video").length;
-    counts.append(el("div", { class: "counts-row" },
-      el("span", {}, "All"),
-      el("span", { class: "counts-num" }, String(total)),
-    ));
-    counts.append(el("div", { class: "counts-row" },
-      el("span", {}, "Photos"),
-      el("span", { class: "counts-num" }, String(photos)),
-    ));
-    counts.append(el("div", { class: "counts-row" },
-      el("span", {}, "Videos"),
-      el("span", { class: "counts-num" }, String(videos)),
-    ));
-    auxEl.append(counts);
+    const rows: Array<[FilterKind, string, number]> = [
+      ["all", "All", media.length],
+      ["image", "Photos", photos],
+      ["video", "Videos", videos],
+    ];
+    for (const [kind, label, count] of rows) {
+      const tab = el("button", {
+        class: "filter-tab",
+        type: "button",
+        "data-active": filter === kind ? "true" : "false",
+      });
+      tab.append(el("span", { class: "filter-label" }, label));
+      tab.append(el("span", { class: "filter-count" }, String(count)));
+      tab.addEventListener("click", () => {
+        if (filter === kind) return;
+        filter = kind;
+        // Filter changes invalidate the anchor since visible indices shift.
+        anchorIndex = -1;
+        renderAux();
+        renderMain();
+      });
+      tabs.append(tab);
+    }
+    auxEl.append(tabs);
   }
 
   // Spacer + version footer
@@ -422,7 +449,99 @@ function paintFooter() {
     summary.removeAttribute("data-mode");
   }
   const importBtn = footer.querySelector<HTMLButtonElement>(".import-btn");
-  if (importBtn) importBtn.disabled = true; // Import lands in M3
+  if (importBtn) {
+    const importing = importStatus?.phase === "started" || importStatus?.phase === "copying";
+    importBtn.disabled = selected.size === 0 || importing;
+    importBtn.textContent = selected.size > 0
+      ? `Import ${selected.size}…`
+      : "Import";
+  }
+}
+
+async function startImport() {
+  if (selected.size === 0) return;
+  if (importStatus?.phase === "started" || importStatus?.phase === "copying") return;
+  let dest: string | null = null;
+  try {
+    const picked = await openDialog({
+      directory: true,
+      multiple: false,
+      defaultPath: lastDestination ?? undefined,
+      title: `Import ${selected.size} item${selected.size === 1 ? "" : "s"} to…`,
+    });
+    if (typeof picked !== "string" || !picked) return;
+    dest = picked;
+  } catch (e) {
+    console.warn("folder picker failed:", e);
+    return;
+  }
+
+  // Snapshot the selection in the order it appears in `media`, so the
+  // progress overlay's "N of M" follows the same visual ordering.
+  const paths = media.filter((m) => selected.has(m.path)).map((m) => m.path);
+
+  importStatus = { phase: "started", total: paths.length };
+  renderMain(); // overlay appears
+
+  try {
+    await invoke("import_files", { paths, dest });
+    // Backend already emitted phase=done; renderMain'll have refreshed.
+    selected.clear();
+    anchorIndex = -1;
+    lastDestination = dest;
+  } catch (e) {
+    console.error("import_files failed:", e);
+    // Backend already emitted phase=error too; leave that visible.
+  }
+}
+
+function buildImportOverlay(): HTMLElement | null {
+  if (!importStatus) return null;
+  const s = importStatus;
+  const overlay = el("div", { class: "import-overlay", "data-phase": s.phase });
+  if (s.phase === "started") {
+    overlay.append(el("div", { class: "import-row" },
+      el("strong", {}, `Importing ${s.total} item${s.total === 1 ? "" : "s"}…`),
+    ));
+  } else if (s.phase === "copying") {
+    const pct = s.totalBytes && s.bytesCopied != null
+      ? Math.min(100, Math.floor((s.bytesCopied / s.totalBytes) * 100))
+      : 0;
+    overlay.append(el("div", { class: "import-row" },
+      el("strong", {}, `Importing ${s.current} of ${s.total}`),
+      el("span", { class: "import-name" }, s.name ?? ""),
+    ));
+    const bar = el("div", { class: "import-bar" });
+    const fill = el("div", { class: "import-bar-fill" });
+    fill.style.width = `${pct}%`;
+    bar.append(fill);
+    overlay.append(bar);
+    if (s.totalBytes && s.bytesCopied != null) {
+      overlay.append(el("div", { class: "import-bytes" },
+        `${formatBytes(s.bytesCopied)} / ${formatBytes(s.totalBytes)}`));
+    }
+  } else if (s.phase === "done") {
+    overlay.append(el("div", { class: "import-row done" },
+      el("strong", {}, `Imported ${s.copied} of ${s.total}`),
+    ));
+    const dismiss = el("button", { class: "import-dismiss", type: "button" }, "Dismiss");
+    dismiss.addEventListener("click", () => { importStatus = null; renderMain(); });
+    overlay.append(dismiss);
+  } else if (s.phase === "error") {
+    overlay.append(el("div", { class: "import-row error" },
+      el("strong", {}, `Import failed after ${s.copied ?? 0} of ${s.total}`),
+      el("span", { class: "import-err-msg" }, s.error ?? ""),
+    ));
+    const dismiss = el("button", { class: "import-dismiss", type: "button" }, "Dismiss");
+    dismiss.addEventListener("click", () => { importStatus = null; renderMain(); });
+    overlay.append(dismiss);
+  }
+  return overlay;
+}
+
+function visibleMedia(): MediaItem[] {
+  if (filter === "all") return media;
+  return media.filter((m) => m.kind === filter);
 }
 
 function buildMediaTable(): HTMLElement {
@@ -436,15 +555,22 @@ function buildMediaTable(): HTMLElement {
 
   thumbObserver?.disconnect();
   thumbObserver = newThumbObserver(grid);
-  media.forEach((item, i) => grid.append(buildMediaCell(item, i)));
+  const visible = visibleMedia();
+  visible.forEach((item, i) => grid.append(buildMediaCell(item, i)));
   wrap.append(grid);
+
+  // Optional progress overlay (only when an import is in flight or
+  // just finished and the user hasn't dismissed it).
+  const overlay = buildImportOverlay();
+  if (overlay) wrap.append(overlay);
 
   // Footer
   const footer = el("div", { class: "media-footer" });
   const summaryEl = el("span", { class: "footer-summary" }, "");
   footer.append(summaryEl);
   const importBtn = el("button", { class: "import-btn", type: "button", disabled: "" },
-    "Import (coming in M3)") as HTMLButtonElement;
+    "Import") as HTMLButtonElement;
+  importBtn.addEventListener("click", () => void startImport());
   footer.append(importBtn);
   wrap.append(footer);
 
@@ -481,12 +607,13 @@ function buildMediaCell(item: MediaItem, index: number): HTMLElement {
 
 function onCellClick(e: MouseEvent, index: number) {
   e.stopPropagation();
-  const item = media[index];
+  const visible = visibleMedia();
+  const item = visible[index];
   if (!item) return;
 
   if (e.shiftKey && anchorIndex >= 0) {
     const [a, b] = anchorIndex < index ? [anchorIndex, index] : [index, anchorIndex];
-    for (let i = a; i <= b; i++) selected.add(media[i].path);
+    for (let i = a; i <= b; i++) selected.add(visible[i].path);
   } else if (e.ctrlKey || e.metaKey) {
     if (selected.has(item.path)) selected.delete(item.path);
     else selected.add(item.path);
@@ -614,6 +741,29 @@ async function boot() {
   const topbar = buildMainTopbar();
   mainContentEl = el("div", { class: "main-content" });
   viewportEl.replaceChildren(topbar, mainContentEl);
+
+  // Load persisted settings (last destination folder).
+  try {
+    const s = await invoke<{ lastDestination?: string }>("load_settings");
+    lastDestination = s.lastDestination ?? null;
+  } catch (e) { console.warn("load_settings failed:", e); }
+
+  // Import progress.
+  await listen<ImportStatus>("import-status", (e) => {
+    importStatus = e.payload;
+    // Tiny throttling: copying events arrive fast, just redraw the
+    // overlay's bar via the existing render path.
+    renderMain();
+    if (importStatus.phase === "done") {
+      // Auto-dismiss after a few seconds so the grid is usable again.
+      setTimeout(() => {
+        if (importStatus?.phase === "done") {
+          importStatus = null;
+          renderMain();
+        }
+      }, 2500);
+    }
+  });
 
   // Streamed listing — append each batch as it arrives. Re-render
   // is debounced so 30k items in 600 batches don't repaint the table
