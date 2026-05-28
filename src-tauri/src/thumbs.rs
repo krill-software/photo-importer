@@ -1,7 +1,11 @@
 //! On-demand thumbnail generation with a disk cache.
 //!
 //! - JPEG / PNG / WebP / GIF / BMP / TIFF via the `image` crate.
-//! - HEIC / HEIF via libheif-rs, gated behind the `heic-thumbs` feature.
+//! - HEIC / HEIF by shelling out to `heif-thumbnailer` (the binary
+//!   shipped with the `libheif-examples` Debian/Ubuntu package).
+//!   Avoids the libheif-rs / libheif-sys ABI version pin that breaks
+//!   builds across distros — works against whatever libheif version
+//!   the host ships.
 //! - Cache key = SHA-256 of `<absolute path> + <mtime ms>` so renaming
 //!   the source or editing it on the iPhone invalidates cleanly.
 //! - Output: 256×256-max JPEG at quality 80.
@@ -12,6 +16,7 @@
 //! src=>` it directly without enabling Tauri's asset protocol.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{anyhow, Context, Result};
@@ -127,38 +132,42 @@ fn decode_source(path: &Path) -> Result<DynamicImage> {
     }
 }
 
-#[cfg(feature = "heic-thumbs")]
+/// Counter for unique temp-file names so concurrent thumbnail jobs
+/// don't collide. Combined with PID so multiple instances don't fight.
+static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn decode_heic(path: &Path) -> Result<DynamicImage> {
-    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+    // heif-thumbnailer ships with libheif-examples. It outputs a JPEG
+    // (or PNG, depending on extension) at a max edge size we choose,
+    // so this fully replaces the libheif-rs FFI path with no version
+    // pinning headaches.
+    //
+    // Usage: `heif-thumbnailer -s 320 input.heic output.jpg`
+    let n = TMP_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let tmp = std::env::temp_dir().join(format!(
+        "krill-photo-importer-heic-{}-{n}.jpg",
+        std::process::id(),
+    ));
 
-    let lib = LibHeif::new();
-    let ctx = HeifContext::read_from_file(
-        path.to_str().ok_or_else(|| anyhow!("non-utf8 path"))?,
-    )?;
-    let handle = ctx.primary_image_handle()?;
-    let img = lib.decode(&handle, ColorSpace::Rgb(RgbChroma::Rgb), None)?;
-    let planes = img.planes();
-    let plane = planes
-        .interleaved
-        .ok_or_else(|| anyhow!("HEIC decode produced no interleaved plane"))?;
-    let w = plane.width;
-    let h = plane.height;
-    let stride = plane.stride;
-    let row_bytes = w as usize * 3;
-
-    // libheif's stride is usually > w*3 (row padding); copy each row
-    // into a packed RGB buffer that image crate can consume.
-    let mut packed = Vec::with_capacity(h as usize * row_bytes);
-    for y in 0..h as usize {
-        let start = y * stride;
-        packed.extend_from_slice(&plane.data[start..start + row_bytes]);
+    let status = std::process::Command::new("heif-thumbnailer")
+        .args(["-s", "320"])
+        .arg(path)
+        .arg(&tmp)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .context(
+            "running heif-thumbnailer (install `libheif-examples` for HEIC support)",
+        )?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(anyhow!("heif-thumbnailer exited {status}"));
     }
-    let rgb = image::RgbImage::from_raw(w, h as u32, packed)
-        .ok_or_else(|| anyhow!("from_raw rejected the buffer"))?;
-    Ok(DynamicImage::ImageRgb8(rgb))
-}
 
-#[cfg(not(feature = "heic-thumbs"))]
-fn decode_heic(_path: &Path) -> Result<DynamicImage> {
-    Err(anyhow!("HEIC support not built in (rebuild with default features)"))
+    let img = image::ImageReader::open(&tmp)
+        .with_context(|| format!("opening thumbnailer output at {}", tmp.display()))?
+        .with_guessed_format()?
+        .decode()?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(img)
 }

@@ -29,15 +29,12 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png",
 sha2 = "0.10"
 hex = "0.4"
 base64 = "0.22"
-libheif-rs = { version = "2", optional = true }
 
-[features]
-default = ["heic-thumbs"]
-# HEIC thumbnail decoding via libheif. Requires `libheif-dev` at build
-# time and `libheif1` at runtime. Disable with `--no-default-features`
-# if either is missing — HEIC files render with a generic icon instead
-# of a real thumbnail.
-heic-thumbs = ["dep:libheif-rs"]
+# HEIC thumbnails are produced by shelling out to `heif-thumbnailer`
+# (from the system `libheif-examples` package) — see thumbs.rs. That
+# avoids the libheif-rs / libheif-sys version-pin headache: Ubuntu
+# Noble ships libheif 1.17 but libheif-sys 5.x requires >= 1.21, etc.
+# Shell-out works against whatever libheif version the distro ships.
 
 [profile.release]
 panic = "abort"
