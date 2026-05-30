@@ -15,12 +15,14 @@
   flex-direction: column;
 }
 
+/* Shell chrome — mirrors desktop-ui's #titlebar: 40px tall, 8px gutter,
+ * 22px rounded-box icon buttons, rule-alpha hover (soft-red for close). */
 .aux-topbar {
   position: relative;
   display: flex;
   align-items: center;
-  height: 32px;
-  padding: 0 6px;
+  height: 40px;
+  padding: 0 8px;
   flex-shrink: 0;
 }
 
@@ -29,33 +31,33 @@
   align-items: center;
   justify-content: flex-end;
   gap: 2px;
-  height: 32px;
-  padding: 0 6px;
+  height: 40px;
+  padding: 0 8px;
   flex-shrink: 0;
   background: var(--fm-bg);
 }
 
 .main-topbar-btn {
-  width: 28px;
-  height: 24px;
-  display: flex;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   border: none;
   background: transparent;
   color: var(--fm-muted);
-  border-radius: 3px;
+  border-radius: 4px;
   cursor: pointer;
   padding: 0;
   transition: background-color 100ms ease, color 100ms ease;
 }
 .main-topbar-btn:hover { background: var(--fm-rule); color: var(--fm-ink); }
-.main-topbar-btn[data-kind="close"]:hover { background: var(--fm-accent); color: var(--fm-bg); }
+.main-topbar-btn[data-kind="close"]:hover { background: #e8a5a5; color: var(--fm-ink); }
 
 .menu-popover {
   position: absolute;
-  top: 36px;
-  left: 6px;
+  top: 44px;
+  left: 8px;
   min-width: 180px;
   background: var(--fm-bg);
   border: 1px solid var(--fm-rule-strong);
