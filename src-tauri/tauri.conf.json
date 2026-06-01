@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "Photo Importer",
-        "width": 1100,
-        "height": 760,
+        "width": 1296,
+        "height": 800,
         "minWidth": 720,
-        "minHeight": 540,
+        "minHeight": 445,
         "decorations": false,
         "resizable": true,
         "center": true,
@@ -37,7 +37,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["deb", "appimage"],
+    "targets": [
+      "deb",
+      "appimage"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -46,7 +49,7 @@
     ],
     "category": "Utility",
     "shortDescription": "Import iPhone photos over USB",
-    "longDescription": "Plug in your iPhone over USB, browse the Camera Roll, select photos and videos, and batch-import to a Linux folder. Read-only against the phone — never deletes or modifies originals.",
+    "longDescription": "Plug in your iPhone over USB, browse the Camera Roll, select photos and videos, and batch-import to a Linux folder. Read-only against the phone \u2014 never deletes or modifies originals.",
     "linux": {
       "deb": {
         "section": "graphics",

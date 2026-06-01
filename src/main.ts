@@ -85,8 +85,8 @@ let listing = false;
 /// Schedule incremental re-renders without thrashing on every batch.
 let pendingRender = 0;
 
-type FilterKind = "all" | "image" | "video";
-let filter: FilterKind = "all";
+type FilterKind = "image" | "video";
+let filter: FilterKind = "image";
 
 interface ImportStatus {
   phase: "started" | "copying" | "done" | "error";
@@ -166,30 +166,16 @@ function renderAux() {
   auxEl.replaceChildren();
   auxEl.append(buildAuxTopbar());
 
-  // Refresh row — at the top so the most-used action is closest to
-  // the hamburger.
-  const refreshRow = el("button", {
-    class: "aux-nav refresh-row",
-    type: "button",
-    title: "Refresh device",
+  // Device card. Click to re-scan when empty; right-aligned sync button
+  // when a device is ready.
+  const isClickable = device.kind === "none" && !refreshing && envOk(env ?? {} as EnvCheck);
+  const deviceCard = el(isClickable ? "button" : "div", {
+    class: "device-card",
+    ...(isClickable ? { type: "button", title: "Look for devices again" } : {}),
   });
-  if (refreshing) refreshRow.setAttribute("data-refreshing", "true");
-  const refreshIcon = el("div", { class: "aux-nav-icon" });
-  refreshIcon.append(iconSvg("refresh-cw", 16));
-  refreshRow.append(refreshIcon);
-  const refreshText = el("div", { class: "aux-nav-text" });
-  refreshText.append(el("div", { class: "aux-nav-name" },
-    refreshing ? "Syncing…" : "Refresh"));
-  refreshText.append(el("div", { class: "aux-nav-sub" },
-    refreshing ? "talking to the iPhone" : "re-detect the iPhone"));
-  refreshRow.append(refreshText);
-  refreshRow.addEventListener("click", () => {
-    if (!refreshing) void refresh();
-  });
-  auxEl.append(refreshRow);
-
-  // Device card
-  const deviceCard = el("div", { class: "device-card" });
+  if (isClickable) {
+    deviceCard.addEventListener("click", () => { if (!refreshing) void refresh(); });
+  }
   const visual = el("div", { class: "device-visual" });
   visual.append(iconSvg("smartphone", 24));
   deviceCard.append(visual);
@@ -197,11 +183,13 @@ function renderAux() {
   if (env && !envOk(env)) {
     text.append(el("div", { class: "device-name muted" }, "Setup needed"));
     text.append(el("div", { class: "device-sub" }, "Install missing tools first"));
+  } else if (device.kind === "none" && refreshing) {
+    text.append(el("div", { class: "device-name muted" }, "Looking for devices…"));
   } else {
     switch (device.kind) {
       case "none":
-        text.append(el("div", { class: "device-name muted" }, "No iPhone"));
-        text.append(el("div", { class: "device-sub" }, "Plug one in via USB"));
+        text.append(el("div", { class: "device-name muted" }, "No devices found"));
+        text.append(el("div", { class: "device-sub" }, "Plug a device in via USB"));
         break;
       case "needs-trust":
         text.append(el("div", { class: "device-name" }, device.device.name));
@@ -209,11 +197,34 @@ function renderAux() {
         break;
       case "ready":
         text.append(el("div", { class: "device-name" }, device.device.name));
-        text.append(el("div", { class: "device-sub" }, "connected"));
+        text.append(el("div", { class: "device-sub" }, refreshing ? "syncing…" : "connected"));
         break;
     }
   }
   deviceCard.append(text);
+
+  // Per-device sync button — visible only when a device is ready.
+  if (device.kind === "ready") {
+    const syncBtn = el("button", {
+      class: "device-sync",
+      type: "button",
+      title: refreshing ? "Syncing…" : "Sync this device",
+      ...(refreshing ? { disabled: "" } : {}),
+    });
+    if (refreshing) syncBtn.setAttribute("data-refreshing", "true");
+    const syncIcon = iconSvg("refresh-cw", 14);
+    // Spin via desktop-ui's shared loader animation rather than a
+    // bespoke @keyframes (see CLAUDE.md → Shared UI components).
+    if (refreshing) syncIcon.classList.add("fm-loader-icon");
+    syncBtn.append(syncIcon);
+    syncBtn.append(el("span", {}, refreshing ? "syncing…" : "sync"));
+    syncBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (!refreshing) void refresh();
+    });
+    deviceCard.append(syncBtn);
+  }
+
   auxEl.append(deviceCard);
 
   // Filter tabs (only when there's media to filter)
@@ -222,7 +233,6 @@ function renderAux() {
     const photos = media.filter((m) => m.kind === "image").length;
     const videos = media.filter((m) => m.kind === "video").length;
     const rows: Array<[FilterKind, string, number]> = [
-      ["all", "All", media.length],
       ["image", "Photos", photos],
       ["video", "Videos", videos],
     ];
@@ -540,7 +550,6 @@ function buildImportOverlay(): HTMLElement | null {
 }
 
 function visibleMedia(): MediaItem[] {
-  if (filter === "all") return media;
   return media.filter((m) => m.kind === filter);
 }
 

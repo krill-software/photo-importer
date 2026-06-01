@@ -113,11 +113,8 @@
   border-bottom: 1px solid var(--fm-rule);
 }
 .device-visual {
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--fm-bg);
-  border: 1px solid var(--fm-rule-strong);
+  width: 28px;
+  height: 28px;
   color: var(--fm-muted);
   display: flex;
   align-items: center;
@@ -141,49 +138,51 @@
   color: var(--fm-muted);
 }
 
-.aux-nav {
-  display: flex;
+/* Per-device sync chip on the right of a device-card. Calm pill,
+ * not a CTA — the action is implied by the card being a device. */
+/* Spin animation comes from desktop-ui's .fm-loader-icon (v0.10.0+).
+ * The local keyframe was dropped; JS adds the class when refreshing. */
+.device-sync {
+  margin-left: auto;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border: none;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--fm-rule-strong);
   background: transparent;
-  cursor: pointer;
-  text-align: left;
-  color: var(--fm-ink);
-  border-bottom: 1px solid var(--fm-rule);
-}
-.aux-nav:hover { background: var(--fm-rule); }
-.aux-nav-icon {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
   color: var(--fm-muted);
+  font-family: var(--fm-mono);
+  font-size: 11px;
+  cursor: pointer;
   flex-shrink: 0;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
 }
-.aux-nav-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-.aux-nav-name { font-size: 13px; font-weight: 600; }
-.aux-nav-sub  { font-size: 10.5px; color: var(--fm-muted); }
-
-/* Refresh row spinner — kicks in while a sync is in flight. */
-@keyframes photos-spin {
-  to { transform: rotate(360deg); }
-}
-.aux-nav.refresh-row[data-refreshing="true"] .aux-nav-icon {
+.device-sync:hover { background: var(--fm-rule); color: var(--fm-text); border-color: var(--fm-text); }
+.device-sync svg { width: 12px; height: 12px; }
+.device-sync[data-refreshing="true"] {
   color: var(--fm-accent);
-}
-.aux-nav.refresh-row[data-refreshing="true"] .aux-nav-icon svg {
-  animation: photos-spin 0.9s linear infinite;
-}
-.aux-nav.refresh-row[data-refreshing="true"] .aux-nav-name {
-  color: var(--fm-accent);
-}
-.aux-nav.refresh-row[data-refreshing="true"]:hover {
-  background: transparent;
+  border-color: var(--fm-accent);
   cursor: default;
 }
+/* Spin behavior handled by the .fm-loader-icon class added in JS. */
+.device-sync[data-refreshing="true"]:hover {
+  background: transparent;
+  color: var(--fm-accent);
+}
+
+/* Empty-state card is clickable (re-scan). Reset native button look. */
+button.device-card {
+  width: 100%;
+  border: none;
+  border-bottom: 1px solid var(--fm-rule);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+button.device-card:hover { background: var(--fm-rule); }
 
 /* Filter tabs (sidebar) */
 .filter-tabs {
